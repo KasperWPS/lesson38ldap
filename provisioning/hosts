@@ -1,0 +1,6 @@
+[servers]
+ipa.otus.lan ansible_host=192.168.56.10 ansible_user=vagrant ansible_ssh_private_key_file=~/.vagrant.d/insecure_private_keys/vagrant.key.rsa
+
+[clients]
+client1.otus.lan ansible_host=192.168.56.11 ansible_user=vagrant ansible_ssh_private_key_file=~/.vagrant.d/insecure_private_keys/vagrant.key.rsa
+client2.otus.lan ansible_host=192.168.56.12 ansible_user=vagrant ansible_ssh_private_key_file=~/.vagrant.d/insecure_private_keys/vagrant.key.rsa

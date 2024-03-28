@@ -1,0 +1,164 @@
+---
+- hosts: all
+  become: true
+  gather_facts: true
+
+  tasks:
+  - name: Accept login with password from sshd
+    ansible.builtin.lineinfile:
+      path: /etc/ssh/sshd_config
+      regexp: '^PasswordAuthentication no$'
+      line: 'PasswordAuthentication yes'
+      state: present
+    notify:
+      - Restart sshd
+
+  - name: Set timezone
+    community.general.timezone:
+      name: Europe/Moscow
+
+  - name: List all files in directory /etc/yum.repos.d/*.repo
+    find:
+      paths: "/etc/yum.repos.d/"
+      patterns: "*.repo"
+    register: repos
+    when: (ansible_os_family == "RedHat")
+
+  - name: Comment mirrorlist /etc/yum.repos.d/CentOS-*
+    ansible.builtin.lineinfile:
+      backrefs: true
+      path: "{{ item.path }}"
+      regexp: '^(mirrorlist=.+)'
+      line: '#\1'
+    with_items: "{{ repos.files }}"
+    when: (ansible_os_family == "RedHat")
+
+  - name: Replace baseurl
+    ansible.builtin.lineinfile:
+      backrefs: true
+      path: "{{ item.path }}"
+      regexp: '^#baseurl=http:\/\/mirror.centos.org(.+)'
+      line: 'baseurl=http://vault.centos.org\1'
+    with_items: "{{ repos.files }}"
+    when: ansible_os_family == "RedHat"
+
+  - name: Install epel-release
+    ansible.builtin.yum:
+      name: epel-release
+      state: present
+    when: (ansible_os_family == "RedHat")
+
+  - name: Install soft on RedHat-based OS
+    ansible.builtin.yum:
+      name:
+        - vim
+        - tcpdump
+        - traceroute
+        - net-tools
+      state: present
+      update_cache: true
+    when: ansible_os_family == "RedHat"
+
+
+  handlers:
+
+  - name: Restart sshd
+    ansible.builtin.service:
+      name: sshd
+      state: restarted
+
+- hosts: ipa.otus.lan
+  become: true
+  gather_facts: false
+
+  vars:
+    rsa_pub: "{{ lookup('file', '~/.ssh/id_rsa.pub') }}"
+
+  tasks:
+
+  - name: Copy nftables config on ipa.otus.lan
+    ansible.builtin.copy:
+      src: files/ipa.otus.lan-nftables.conf
+      dest: /etc/nftables.conf
+    notify:
+      - Configure nftables
+
+  - name: Install IPA server
+    ansible.builtin.yum:
+      name:
+        - '@idm:DL1'
+        - ipa-server
+
+  - name: Edit /etc/hosts
+    ansible.builtin.replace:
+      path: /etc/hosts
+      regexp: '127\.\d\.\d\.\d (ipa.+)'
+      replace: '192.168.56.10 \1'
+
+  - name: Deploy isa server and create user otus-user
+    ansible.builtin.shell: "{{ item }}"
+    with_items:
+      - 'echo -e "no\nyes" | ipa-server-install -n otus.lan -r OTUS.LAN --hostname=ipa.otus.lan --no-ntp --netbios-name=OTUS -p otus2023 -a otus2023'
+      - 'echo "otus2023" | kinit admin'
+      - 'echo "otus2023" | ipa user-add otus-user --first=Otus --last=User --password --sshpubkey="{{ rsa_pub }}"'
+
+  handlers:
+
+  - name: Configure nftables
+    ansible.builtin.lineinfile:
+      path: /etc/sysconfig/nftables.conf
+      line: 'include "/etc/nftables.conf"'
+      state: present
+    notify:
+      - Restart nftables service
+
+  - name: Restart nftables service
+    ansible.builtin.service:
+      name: nftables
+      enabled: true
+      state: restarted
+
+
+- hosts: clients
+  become: true
+  gather_facts: false
+
+  tasks:
+
+  - name: Add ipa.otus.lan to /etc/hosts
+    ansible.builtin.lineinfile:
+      path: /etc/hosts
+      line: 192.168.56.10 ipa.otus.lan ipa
+
+  - name: Install freeipa-client
+    ansible.builtin.yum:
+      name: freeipa-client
+      state: present
+      update_cache: true
+
+  - name: Add host to ipa-server
+    shell: echo -e "yes\nyes" | ipa-client-install --mkhomedir --domain=OTUS.LAN --server=ipa.otus.lan --no-ntp -p admin -w otus2023
+
+  - name: Copy nftables config on client
+    ansible.builtin.copy:
+      src: files/clients-nftables.conf
+      dest: /etc/nftables.conf
+    notify:
+      - Configure nftables
+
+  handlers:
+
+  - name: Configure nftables
+    ansible.builtin.lineinfile:
+      path: /etc/sysconfig/nftables.conf
+      line: 'include "/etc/nftables.conf"'
+      state: present
+    notify:
+      - Restart nftables service
+
+  - name: Restart nftables service
+    ansible.builtin.service:
+      name: nftables
+      enabled: true
+      state: restarted
+
